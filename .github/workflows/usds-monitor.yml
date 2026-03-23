@@ -1,0 +1,24 @@
+name: USDS Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run USDS monitor
+        env:
+          LARK_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL }}
+          ALERT_DROP_THRESHOLD: "0.02"
+          HTTP_TIMEOUT_SECONDS: "20"
+        run: python -m stablecoin_monitor usds
+
