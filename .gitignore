@@ -7,3 +7,4 @@ __pycache__/
 worker/**/.dev.vars*
 worker/**/.wrangler/
 worker/**/node_modules/
+!worker/**/.dev.vars.example
