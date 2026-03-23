@@ -48,6 +48,7 @@ def main() -> int:
             state_file = repo_root / ".state" / f"{result.source_name.lower()}-alert-state.json"
         result = apply_alert_state(
             result,
+            settings,
             state_file,
             persist=not settings.dry_run,
         )

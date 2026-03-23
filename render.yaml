@@ -1,0 +1,28 @@
+services:
+  - type: cron
+    name: stablecoin-monitor-usds
+    runtime: python
+    schedule: "7,22,37,52 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m stablecoin_monitor usds
+    envVars:
+      - key: LARK_WEBHOOK_URL
+        sync: false
+      - key: ALERT_DROP_THRESHOLD
+        value: "0.02"
+      - key: HTTP_TIMEOUT_SECONDS
+        value: "20"
+      - key: STATE_BACKEND
+        value: redis
+      - key: STATE_KEY_PREFIX
+        value: stablecoin-monitor
+      - key: STATE_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: stablecoin-monitor-state
+          property: connectionString
+
+  - type: keyvalue
+    name: stablecoin-monitor-state
+    ipAllowList: []
+    plan: free

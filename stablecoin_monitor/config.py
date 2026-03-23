@@ -39,6 +39,9 @@ class Settings:
     webhook_url: str
     alert_drop_threshold: Decimal
     http_timeout_seconds: int
+    state_backend: str
+    state_redis_url: str
+    state_key_prefix: str
     dry_run: bool
 
     def force_dry_run(self) -> "Settings":
@@ -54,16 +57,26 @@ def get_settings(repo_root: Path, *, allow_missing_webhook: bool = False) -> Set
         os.getenv("ALERT_DROP_THRESHOLD", "0.02").strip()
     )
     http_timeout_seconds = int(os.getenv("HTTP_TIMEOUT_SECONDS", "20").strip())
+    state_backend = os.getenv("STATE_BACKEND", "file").strip().lower()
+    state_redis_url = os.getenv("STATE_REDIS_URL", "").strip()
+    state_key_prefix = os.getenv("STATE_KEY_PREFIX", "stablecoin-monitor").strip()
     dry_run = _parse_bool(os.getenv("DRY_RUN"), default=False)
 
     if not webhook_url and not dry_run and not allow_missing_webhook:
         raise ValueError(
             "LARK_WEBHOOK_URL is required unless DRY_RUN=true or --dry-run is used."
         )
+    if state_backend not in {"file", "redis", "none"}:
+        raise ValueError("STATE_BACKEND must be one of: file, redis, none.")
+    if state_backend == "redis" and not state_redis_url:
+        raise ValueError("STATE_REDIS_URL is required when STATE_BACKEND=redis.")
 
     return Settings(
         webhook_url=webhook_url,
         alert_drop_threshold=alert_drop_threshold,
         http_timeout_seconds=http_timeout_seconds,
+        state_backend=state_backend,
+        state_redis_url=state_redis_url,
+        state_key_prefix=state_key_prefix,
         dry_run=dry_run,
     )
