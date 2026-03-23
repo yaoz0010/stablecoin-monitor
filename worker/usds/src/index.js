@@ -4,11 +4,28 @@ const USDS_OVERALL_URL =
   "https://info-sky.blockanalitica.com/overall/?days_ago=1";
 const USDS_GROUPS_URL =
   "https://info-sky.blockanalitica.com/groups/overall/?days_ago=1";
+const GHO_COLLATERAL_RATIO_URL =
+  "https://aave.tokenlogic.xyz/api/gho_tokenlogic?table=gho_collateral_ratio";
+const GHO_LIQUIDITY_PANEL_URL =
+  "https://aave.tokenlogic.xyz/api/gho_tokenlogic?table=gho_liquidity_panel";
 const STATE_SUFFIX = "alert-state";
+const USDS_CRON = "7,22,37,52 * * * *";
+const GHO_CRON = "0 1 * * *";
 
 export default {
-  async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(runUsdsMonitor(env, { source: "cron" }));
+  async scheduled(controller, env, ctx) {
+    switch (controller.cron) {
+      case USDS_CRON:
+        ctx.waitUntil(runUsdsMonitor(env, { source: "cron" }));
+        break;
+      case GHO_CRON:
+        ctx.waitUntil(runGhoMonitor(env, { source: "cron" }));
+        break;
+      default:
+        ctx.waitUntil(
+          Promise.reject(new Error(`Unhandled cron trigger: ${controller.cron}`))
+        );
+    }
   },
 
   async fetch(request, env) {
@@ -31,11 +48,24 @@ export default {
       return jsonResponse(result);
     }
 
+    if (url.pathname === "/run/gho") {
+      const authResponse = validateManualTriggerToken(request, env);
+      if (authResponse) {
+        return authResponse;
+      }
+      const result = await runGhoMonitor(env, {
+        source: "http",
+        persistState: true,
+        sendMessage: true,
+      });
+      return jsonResponse(result);
+    }
+
     return jsonResponse(
       {
         ok: false,
         error: "Not found",
-        available_paths: ["/health", "/run/usds"],
+        available_paths: ["/health", "/run/usds", "/run/gho"],
       },
       404
     );
@@ -117,6 +147,85 @@ async function runUsdsMonitor(
   };
 }
 
+async function runGhoMonitor(
+  env,
+  {
+    source,
+    persistState = true,
+    sendMessage = true,
+  } = {}
+) {
+  const timeoutMs = parseInteger(env.HTTP_TIMEOUT_MS, 20000);
+  const thresholdRatio = new Decimal(env.ALERT_DROP_THRESHOLD || "0.02");
+
+  const [collateralResponse, liquidityResponse] = await Promise.all([
+    fetchJson(GHO_COLLATERAL_RATIO_URL, timeoutMs),
+    fetchJson(GHO_LIQUIDITY_PANEL_URL, timeoutMs),
+  ]);
+
+  const [latestRow, previousRow] = latestTwoCollateralRows(collateralResponse.data || []);
+  const liquidityRow = (liquidityResponse.data || [])[0];
+  if (!liquidityRow) {
+    throw new Error("gho_liquidity_panel returned no rows.");
+  }
+
+  const latestDay = latestRow.block_day.value;
+  const previousDay = previousRow.block_day.value;
+
+  const metrics = [
+    buildMetricFromValues({
+      name: "Collateral Ratio",
+      currentRaw: latestRow.collat_ratio,
+      baselineRaw: previousRow.collat_ratio,
+      thresholdRatio,
+      asPercent: true,
+    }),
+    buildMetricFromValues({
+      name: "GHO in Liquidity Pools",
+      currentRaw: liquidityRow.gho_in_liquidity_pools,
+      baselineRaw: liquidityRow.gho_in_liquidity_pools_yesterday,
+      thresholdRatio,
+      asPercent: false,
+    }),
+  ];
+
+  let result = {
+    sourceName: "GHO",
+    summaryTime: latestDay,
+    baselineLabel: "前一日",
+    ruleDescription: "相对前一日",
+    note:
+      `Collateral Ratio 对比: ${latestDay} vs ${previousDay}; ` +
+      "Liquidity 对比: gho_in_liquidity_pools vs gho_in_liquidity_pools_yesterday",
+    metrics,
+    alertNames: metrics.filter((metric) => metric.isAlert).map((metric) => metric.name),
+    newAlertNames: [],
+    recoveredAlertNames: [],
+    priorStateFound: false,
+  };
+
+  result = await applyAlertState(result, env, { persistState });
+
+  const payload = buildCardPayload(result, thresholdRatio);
+  if (sendMessage) {
+    await sendMessageToLark(env.LARK_WEBHOOK_URL, payload, timeoutMs);
+  }
+  if (persistState) {
+    await persistAlertState(env, result);
+  }
+
+  return {
+    ok: true,
+    source,
+    summaryTime: result.summaryTime,
+    status: buildStatusText(result),
+    alertNames: result.alertNames,
+    newAlertNames: result.newAlertNames,
+    recoveredAlertNames: result.recoveredAlertNames,
+    priorStateFound: result.priorStateFound,
+  };
+}
+
 async function fetchJson(url, timeoutMs) {
   const response = await fetch(url, {
     headers: {
@@ -153,6 +262,29 @@ function buildMetricFromChangeField({
   };
 }
 
+function buildMetricFromValues({
+  name,
+  currentRaw,
+  baselineRaw,
+  thresholdRatio,
+  asPercent,
+}) {
+  const current = toDecimal(currentRaw);
+  const baseline = toDecimal(baselineRaw);
+  if (baseline.eq(0)) {
+    throw new Error(`${name} baseline value is zero; cannot compute change ratio.`);
+  }
+  const changeRatio = current.minus(baseline).div(baseline);
+
+  return {
+    name,
+    currentDisplay: formatMetricValue(currentRaw, { asPercent }),
+    baselineDisplay: formatMetricValue(baselineRaw, { asPercent }),
+    changeDisplay: formatChangePercent(changeRatio),
+    isAlert: changeRatio.lte(thresholdRatio.neg()),
+  };
+}
+
 async function applyAlertState(result, env, { persistState }) {
   const previous = await readState(env, result.sourceName);
   const currentAlertNames = new Set(result.alertNames);
@@ -172,6 +304,25 @@ async function applyAlertState(result, env, { persistState }) {
   };
 
   return updated;
+}
+
+function latestTwoCollateralRows(rows) {
+  const rowsByDay = new Map();
+  for (const row of rows) {
+    if (row?.block_day?.value) {
+      rowsByDay.set(row.block_day.value, row);
+    }
+  }
+
+  const orderedDays = [...rowsByDay.keys()].sort();
+  if (orderedDays.length < 2) {
+    throw new Error("Not enough daily rows in gho_collateral_ratio.");
+  }
+
+  return [
+    rowsByDay.get(orderedDays[orderedDays.length - 1]),
+    rowsByDay.get(orderedDays[orderedDays.length - 2]),
+  ];
 }
 
 async function persistAlertState(env, result) {

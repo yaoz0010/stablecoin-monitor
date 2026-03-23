@@ -63,8 +63,8 @@ python -m stablecoin_monitor all --dry-run
   - 保留原始 Python 版本
   - 适合本地运行、GitHub Actions、以后迁移到其他平台
 - `worker/usds/`
-  - Cloudflare Worker 版 USDS
-  - 适合用 Cron Trigger 跑每 15 分钟的云端任务
+  - Cloudflare Worker 版 USDS + GHO
+  - 适合用 Cron Trigger 跑每 15 分钟的 USDS 和每天一次的 GHO
   - 使用 Workers KV 保存告警状态
 
 ## GitHub Actions
@@ -114,11 +114,12 @@ python -m stablecoin_monitor all --dry-run
 
 ## Cloudflare Worker
 
-仓库里新增了 [worker/usds/wrangler.jsonc](/d:/学习/课外/stablecoin-monitor/worker/usds/wrangler.jsonc) 和 [worker/usds/src/index.js](/d:/学习/课外/stablecoin-monitor/worker/usds/src/index.js)，用于把 USDS 迁到 Cloudflare Workers。
+仓库里新增了 [worker/usds/wrangler.jsonc](/d:/学习/课外/stablecoin-monitor/worker/usds/wrangler.jsonc) 和 [worker/usds/src/index.js](/d:/学习/课外/stablecoin-monitor/worker/usds/src/index.js)，用于把 USDS 和 GHO 迁到 Cloudflare Workers。
 
 这个 Worker 的职责:
 
 - 每 15 分钟抓取 USDS 两个接口
+- 每天北京时间 `09:00` 抓取 GHO 两个接口
 - 用 Workers KV 保存上一次告警状态
 - 正常和异常都发送飞书卡片
 - 只有“新进入告警”的指标才 `@所有人`
@@ -126,7 +127,9 @@ python -m stablecoin_monitor all --dry-run
 
 当前 Cloudflare 配置:
 
-- Cron Trigger: `7,22,37,52 * * * *`
+- Cron Triggers:
+  - `7,22,37,52 * * * *` for USDS
+  - `0 1 * * *` for GHO
 - KV binding: `STATE_KV`
 - Secret: `LARK_WEBHOOK_URL`
 - 可选 Secret: `MANUAL_TRIGGER_TOKEN`
@@ -157,10 +160,12 @@ Worker 调试入口:
 
 - `GET /health`
 - `GET /run/usds`
+- `GET /run/gho`
 
 说明:
 
 - `/run/usds` 会真正执行一次并向飞书发消息
+- `/run/gho` 会真正执行一次并向飞书发消息
 - 如果你设置了 `MANUAL_TRIGGER_TOKEN`，请求时带上 `Authorization: Bearer <token>` 或 `?token=<token>`
 - 如果你只想测试代码，不想发消息，优先用本地 Python 版的 `--dry-run`
 
