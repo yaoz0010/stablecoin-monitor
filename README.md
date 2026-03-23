@@ -1,6 +1,6 @@
 # stablecoin-monitor
 
-抓取 USDS 和 GHO 的公开接口数据，按“相对前一周期下滑超过 2%”的规则判断是否告警，并通过飞书自定义机器人卡片推送到群里。项目默认适配 GitHub Actions，也提供了 Render Cron Job 部署方式。
+抓取 USDS 和 GHO 的公开接口数据，按“相对前一周期下滑超过 2%”的规则判断是否告警，并通过飞书自定义机器人卡片推送到群里。项目默认保留 Python 实现，并额外提供 Cloudflare Worker 版 USDS 方案。
 
 ## 已实现范围
 
@@ -57,6 +57,16 @@ python -m stablecoin_monitor gho --dry-run
 python -m stablecoin_monitor all --dry-run
 ```
 
+## Python 与 Worker
+
+- `stablecoin_monitor/`
+  - 保留原始 Python 版本
+  - 适合本地运行、GitHub Actions、以后迁移到其他平台
+- `worker/usds/`
+  - Cloudflare Worker 版 USDS
+  - 适合用 Cron Trigger 跑每 15 分钟的云端任务
+  - 使用 Workers KV 保存告警状态
+
 ## GitHub Actions
 
 已内置两个工作流:
@@ -101,6 +111,58 @@ python -m stablecoin_monitor all --dry-run
 - Render Key Value 官方文档说明，`connectionString` 可以通过 Blueprint `fromService` 注入；Key Value 也支持 Redis 协议连接
 - Render Key Value 的 `free` 实例不落盘持久化，实例重启后可能丢状态；如果你希望告警去重更稳，建议把 Key Value 升级到带持久化的付费实例
 - GHO 这种每天一次的任务仍然更适合继续留在 GitHub Actions
+
+## Cloudflare Worker
+
+仓库里新增了 [worker/usds/wrangler.jsonc](/d:/学习/课外/stablecoin-monitor/worker/usds/wrangler.jsonc) 和 [worker/usds/src/index.js](/d:/学习/课外/stablecoin-monitor/worker/usds/src/index.js)，用于把 USDS 迁到 Cloudflare Workers。
+
+这个 Worker 的职责:
+
+- 每 15 分钟抓取 USDS 两个接口
+- 用 Workers KV 保存上一次告警状态
+- 正常和异常都发送飞书卡片
+- 只有“新进入告警”的指标才 `@所有人`
+- 首次运行如果已经处于告警状态，只记录，不直接 `@所有人`
+
+当前 Cloudflare 配置:
+
+- Cron Trigger: `7,22,37,52 * * * *`
+- KV binding: `STATE_KV`
+- Secret: `LARK_WEBHOOK_URL`
+- 可选 Secret: `MANUAL_TRIGGER_TOKEN`
+- 变量:
+  - `ALERT_DROP_THRESHOLD=0.02`
+  - `HTTP_TIMEOUT_MS=20000`
+  - `STATE_KEY_PREFIX=stablecoin-monitor`
+
+推荐部署步骤:
+
+1. 安装 Node.js 20+
+2. 进入 [worker/usds](/d:/学习/课外/stablecoin-monitor/worker/usds)
+3. 执行 `npm install`
+4. 登录 Cloudflare: `npx wrangler login`
+5. 首次部署: `npx wrangler deploy`
+6. 设置飞书 webhook secret: `npx wrangler secret put LARK_WEBHOOK_URL`
+7. 如果你想保留手动 HTTP 触发入口，再设置: `npx wrangler secret put MANUAL_TRIGGER_TOKEN`
+8. 再执行一次 `npx wrangler deploy`
+
+如果你后面修改了 cron 配置，Cloudflare 官方文档说明，使用 Wrangler 管理 Trigger 时应以 Wrangler 配置为准；在版本化部署场景下，触发器变更需要 `wrangler triggers deploy` 才会应用。来源:
+
+- Wrangler 配置与 KV 绑定: <https://developers.cloudflare.com/workers/wrangler/configuration/>
+- Cron Triggers: <https://developers.cloudflare.com/workers/configuration/cron-triggers/>
+- Worker secrets: <https://developers.cloudflare.com/workers/configuration/secrets/>
+- KV bindings: <https://developers.cloudflare.com/kv/concepts/kv-bindings/>
+
+Worker 调试入口:
+
+- `GET /health`
+- `GET /run/usds`
+
+说明:
+
+- `/run/usds` 会真正执行一次并向飞书发消息
+- 如果你设置了 `MANUAL_TRIGGER_TOKEN`，请求时带上 `Authorization: Bearer <token>` 或 `?token=<token>`
+- 如果你只想测试代码，不想发消息，优先用本地 Python 版的 `--dry-run`
 
 ## 消息与告警行为
 

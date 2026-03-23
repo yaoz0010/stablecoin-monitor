@@ -1,0 +1,19 @@
+{
+  "name": "stablecoin-monitor-usds-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "deploy:triggers": "wrangler triggers deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev"
+  },
+  "dependencies": {
+    "decimal.js": "^10.6.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.45.0"
+  }
+}
+

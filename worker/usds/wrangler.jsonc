@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "stablecoin-monitor-usds",
+  "main": "src/index.js",
+  "compatibility_date": "2026-03-23",
+  "workers_dev": true,
+  "triggers": {
+    "crons": ["7,22,37,52 * * * *"]
+  },
+  "vars": {
+    "ALERT_DROP_THRESHOLD": "0.02",
+    "HTTP_TIMEOUT_MS": "20000",
+    "STATE_KEY_PREFIX": "stablecoin-monitor"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "STATE_KV"
+    }
+  ]
+}
+
