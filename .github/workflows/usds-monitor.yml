@@ -11,6 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/cache/restore@v4
+        with:
+          path: .state
+          key: usds-alert-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            usds-alert-state-
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -20,5 +27,10 @@ jobs:
           LARK_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL }}
           ALERT_DROP_THRESHOLD: "0.02"
           HTTP_TIMEOUT_SECONDS: "20"
-        run: python -m stablecoin_monitor usds
+        run: python -m stablecoin_monitor usds --state-file .state/usds-alert-state.json
 
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .state
+          key: usds-alert-state-${{ github.run_id }}-${{ github.run_attempt }}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from .config import Settings
@@ -12,9 +12,6 @@ from .formatters import (
     to_decimal,
 )
 from .http_client import fetch_json
-from .lark import MENTION_ALL_TAG
-
-
 USDS_OVERALL_URL = "https://info-sky.blockanalitica.com/overall/?days_ago=1"
 USDS_GROUPS_URL = "https://info-sky.blockanalitica.com/groups/overall/?days_ago=1"
 GHO_COLLATERAL_RATIO_URL = (
@@ -42,6 +39,9 @@ class MonitorResult:
     rule_description: str
     note: str
     metrics: list[MetricResult]
+    new_alert_names: list[str] = field(default_factory=list)
+    recovered_alert_names: list[str] = field(default_factory=list)
+    prior_state_found: bool = False
 
     @property
     def alert_names(self) -> list[str]:
@@ -49,15 +49,24 @@ class MonitorResult:
 
     @property
     def should_mention_all(self) -> bool:
-        return bool(self.alert_names)
+        return bool(self.new_alert_names)
 
     def render_text(self, threshold_ratio: Decimal) -> str:
         lines: list[str] = []
 
         if self.should_mention_all:
-            lines.append(MENTION_ALL_TAG)
+            lines.append("@所有人")
 
-        status = "告警" if self.should_mention_all else "正常"
+        if self.new_alert_names:
+            status = "新增告警"
+        elif self.alert_names and self.prior_state_found:
+            status = "持续告警"
+        elif self.alert_names:
+            status = "首次运行已发现告警"
+        elif self.recovered_alert_names:
+            status = "告警恢复"
+        else:
+            status = "正常"
         lines.extend(
             [
                 f"[{self.source_name}] {status}",
@@ -69,8 +78,14 @@ class MonitorResult:
             ]
         )
 
-        if self.alert_names:
-            lines.append(f"告警项: {', '.join(self.alert_names)}")
+        if self.new_alert_names:
+            lines.append(f"新增告警项: {', '.join(self.new_alert_names)}")
+        elif self.alert_names and not self.prior_state_found:
+            lines.append("首次运行仅记录状态，不触发 @所有人")
+        elif self.alert_names:
+            lines.append(f"持续告警项: {', '.join(self.alert_names)}")
+        elif self.recovered_alert_names:
+            lines.append(f"恢复项: {', '.join(self.recovered_alert_names)}")
 
         for metric in self.metrics:
             metric_status = "告警" if metric.is_alert else "正常"
@@ -232,4 +247,3 @@ def run_gho_monitor(settings: Settings) -> MonitorResult:
         ),
         metrics=metrics,
     )
-

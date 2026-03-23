@@ -5,8 +5,9 @@ import sys
 from pathlib import Path
 
 from .config import get_settings
-from .lark import send_text_message
+from .lark import build_card_payload, send_message
 from .monitors import run_gho_monitor, run_usds_monitor
+from .state import apply_alert_state
 
 
 def main() -> int:
@@ -21,6 +22,11 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="Build and print the Lark payload without sending it.",
+    )
+    parser.add_argument(
+        "--state-file",
+        type=Path,
+        help="Path to the persisted alert state file for this monitor.",
     )
     args = parser.parse_args()
 
@@ -37,11 +43,19 @@ def main() -> int:
 
     for monitor_function in monitor_functions:
         result = monitor_function(settings)
-        message_text = result.render_text(settings.alert_drop_threshold)
-        print(message_text)
-        send_text_message(
+        state_file = args.state_file
+        if state_file is None:
+            state_file = repo_root / ".state" / f"{result.source_name.lower()}-alert-state.json"
+        result = apply_alert_state(
+            result,
+            state_file,
+            persist=not settings.dry_run,
+        )
+        print(result.render_text(settings.alert_drop_threshold))
+        payload = build_card_payload(result, settings.alert_drop_threshold)
+        send_message(
             settings.webhook_url,
-            message_text,
+            payload,
             settings.http_timeout_seconds,
             dry_run=settings.dry_run,
         )
