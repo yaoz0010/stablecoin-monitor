@@ -10,7 +10,7 @@ const GHO_LIQUIDITY_PANEL_URL =
   "https://aave.tokenlogic.xyz/api/gho_tokenlogic?table=gho_liquidity_panel";
 const STATE_SUFFIX = "alert-state";
 const USDS_CRON = "7,22,37,52 * * * *";
-const GHO_CRON = "0 1 * * *";
+const GHO_CRON = "0 4 * * *";
 
 export default {
   async scheduled(controller, env, ctx) {
