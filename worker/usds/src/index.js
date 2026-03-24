@@ -9,6 +9,7 @@ const GHO_COLLATERAL_RATIO_URL =
 const GHO_LIQUIDITY_PANEL_URL =
   "https://aave.tokenlogic.xyz/api/gho_tokenlogic?table=gho_liquidity_panel";
 const STATE_SUFFIX = "alert-state";
+const SNAPSHOT_SUFFIX = "snapshot";
 const USDS_CRON = "7,22,37,52 * * * *";
 const GHO_CRON = "0 4 * * *";
 
@@ -88,62 +89,82 @@ async function runUsdsMonitor(
     fetchJson(USDS_GROUPS_URL, timeoutMs),
   ]);
 
+  const currentSnapshot = {
+    captured_at: new Date().toISOString(),
+    total: String(overall.total),
+    collateral_ratio: String(groups.collateral_ratio),
+    revenue: String(groups.revenue),
+  };
+  const previousSnapshot = await readSnapshot(env, "USDS");
+
+  if (!previousSnapshot) {
+    await writeSnapshot(env, "USDS", currentSnapshot);
+    return {
+      ok: true,
+      source,
+      summaryTime: overall.date,
+      status: "initialized",
+      message: "USDS snapshot initialized. No alert was sent.",
+    };
+  }
+
   const metrics = [
-    buildMetricFromChangeField({
+    buildMetricFromValues({
       name: "Total Supply",
       currentRaw: overall.total,
-      changeRatioRaw: overall.total_change_percentage,
+      baselineRaw: previousSnapshot.total,
       thresholdRatio,
       asPercent: false,
     }),
-    buildMetricFromChangeField({
+    buildMetricFromValues({
       name: "Collateral Ratio",
       currentRaw: groups.collateral_ratio,
-      changeRatioRaw: groups.collateral_ratio_change_percentage,
+      baselineRaw: previousSnapshot.collateral_ratio,
       thresholdRatio,
       asPercent: true,
     }),
-    buildMetricFromChangeField({
+    buildMetricFromValues({
       name: "Estimated Annual Revenue",
       currentRaw: groups.revenue,
-      changeRatioRaw: groups.revenue_change_percentage,
+      baselineRaw: previousSnapshot.revenue,
       thresholdRatio,
       asPercent: false,
     }),
   ];
 
-  let result = {
+  const result = {
     sourceName: "USDS",
     summaryTime: overall.date,
-    baselineLabel: "t-1",
-    ruleDescription: "相对 t-1",
-    note: "数据源: overall/?days_ago=1 与 groups/overall/?days_ago=1",
+    baselineLabel: "上一周期",
+    ruleDescription: "相对上一周期（约15min）",
+    note:
+      `上一周期快照时间: ${previousSnapshot.captured_at}; ` +
+      "数据源: overall/?days_ago=1 与 groups/overall/?days_ago=1",
     metrics,
     alertNames: metrics.filter((metric) => metric.isAlert).map((metric) => metric.name),
-    newAlertNames: [],
+    newAlertNames: metrics
+      .filter((metric) => metric.isAlert)
+      .map((metric) => metric.name),
     recoveredAlertNames: [],
-    priorStateFound: false,
+    priorStateFound: true,
   };
 
-  result = await applyAlertState(result, env, { persistState });
-
-  const payload = buildCardPayload(result, thresholdRatio);
-  if (sendMessage) {
+  if (result.alertNames.length > 0 && sendMessage) {
+    const payload = buildCardPayload(result, thresholdRatio);
     await sendMessageToLark(env.LARK_WEBHOOK_URL, payload, timeoutMs);
   }
+
   if (persistState) {
-    await persistAlertState(env, result);
+    await writeSnapshot(env, "USDS", currentSnapshot);
   }
 
   return {
     ok: true,
     source,
     summaryTime: result.summaryTime,
-    status: buildStatusText(result),
+    status: result.alertNames.length > 0 ? "alert_sent" : "no_alert_no_push",
     alertNames: result.alertNames,
-    newAlertNames: result.newAlertNames,
-    recoveredAlertNames: result.recoveredAlertNames,
-    priorStateFound: result.priorStateFound,
+    baselineTime: previousSnapshot.captured_at,
   };
 }
 
@@ -353,6 +374,20 @@ async function writeState(env, sourceName, payload) {
 function stateKey(env, sourceName) {
   const prefix = env.STATE_KEY_PREFIX || "stablecoin-monitor";
   return `${prefix}:${sourceName.toLowerCase()}:${STATE_SUFFIX}`;
+}
+
+async function readSnapshot(env, sourceName) {
+  const raw = await env.STATE_KV.get(snapshotKey(env, sourceName));
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function writeSnapshot(env, sourceName, payload) {
+  await env.STATE_KV.put(snapshotKey(env, sourceName), JSON.stringify(payload));
+}
+
+function snapshotKey(env, sourceName) {
+  const prefix = env.STATE_KEY_PREFIX || "stablecoin-monitor";
+  return `${prefix}:${sourceName.toLowerCase()}:${SNAPSHOT_SUFFIX}`;
 }
 
 function buildCardPayload(result, thresholdRatio) {

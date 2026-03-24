@@ -121,9 +121,9 @@ python -m stablecoin_monitor all --dry-run
 - 每 15 分钟抓取 USDS 两个接口
 - 每天北京时间 `12:00` 抓取 GHO 两个接口
 - 用 Workers KV 保存上一次告警状态
-- 正常和异常都发送飞书卡片
-- 只有“新进入告警”的指标才 `@所有人`
-- 首次运行如果已经处于告警状态，只记录，不直接 `@所有人`
+- USDS 使用“上一周期快照（约15min）”作为对比基准
+- USDS 只有告警时才发送飞书卡片，并直接 `@所有人`
+- GHO 继续按日级数据比较，保留原来的状态去重逻辑
 
 当前 Cloudflare 配置:
 
@@ -168,6 +168,7 @@ Worker 调试入口:
 - `/run/gho` 会真正执行一次并向飞书发消息
 - 如果你设置了 `MANUAL_TRIGGER_TOKEN`，请求时带上 `Authorization: Bearer <token>` 或 `?token=<token>`
 - 如果你只想测试代码，不想发消息，优先用本地 Python 版的 `--dry-run`
+- USDS 首次运行会先初始化快照，不发消息
 
 ## 消息与告警行为
 
