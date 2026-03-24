@@ -8,7 +8,7 @@
     "crons": ["7,22,37,52 * * * *", "0 4 * * *"]
   },
   "vars": {
-    "ALERT_DROP_THRESHOLD": "0.02",
+    "ALERT_DROP_THRESHOLD": "0.01",
     "HTTP_TIMEOUT_MS": "20000",
     "STATE_KEY_PREFIX": "stablecoin-monitor"
   },

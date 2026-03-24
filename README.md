@@ -134,7 +134,7 @@ python -m stablecoin_monitor all --dry-run
 - Secret: `LARK_WEBHOOK_URL`
 - 可选 Secret: `MANUAL_TRIGGER_TOKEN`
 - 变量:
-  - `ALERT_DROP_THRESHOLD=0.02`
+  - `ALERT_DROP_THRESHOLD=0.01`
   - `HTTP_TIMEOUT_MS=20000`
   - `STATE_KEY_PREFIX=stablecoin-monitor`
 
