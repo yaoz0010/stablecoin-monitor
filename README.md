@@ -1,55 +1,97 @@
 # stablecoin-monitor
 
-抓取 USDS 和 GHO 的公开接口数据，按“相对前一周期下滑超过 2%”的规则判断是否告警，并通过飞书自定义机器人卡片推送到群里。项目默认保留 Python 实现，并额外提供 Cloudflare Worker 版 USDS 方案。
+当前线上运行方案是 `Cloudflare Workers`。仓库里保留了一份 Python 版本用于本地调试和接口核对，但生产定时任务已经不再依赖 GitHub Actions 或 Render。
 
-## 已实现范围
+## 当前行为
 
-- USDS
+### USDS
+
+- 数据源
   - `https://info-sky.blockanalitica.com/overall/?days_ago=1`
     - 取 `total`
-    - 展示名: `Total Supply`
+    - 展示名：`Total Supply`
   - `https://info-sky.blockanalitica.com/groups/overall/?days_ago=1`
     - 取 `collateral_ratio`、`revenue`
-    - 展示名: `Collateral Ratio`、`Estimated Annual Revenue`
-  - 运行频率: 每 15 分钟
-  - 告警规则: 相对 `t-1` 下滑超过 `2%` 时 `@所有人`
-  - 正常与异常都会推送到群里
+    - 展示名：`Collateral Ratio`、`Estimated Annual Revenue`
+- 调度：每 15 分钟一次
+  - Cron: `7,22,37,52 * * * *`
+- 告警规则
+  - 对比上一条 15 分钟快照
+  - 任一指标下滑超过 `1%` 时发送飞书卡片
+  - 告警时直接 `@所有人`
+  - 不告警就不推送
+- 备注
+  - 首次运行只初始化快照，不发消息
 
-- GHO
+### GHO
+
+- 数据源
   - `gho_collateral_ratio`
     - 取最新一日与前一日的 `collat_ratio`
   - `gho_liquidity_panel`
     - 取 `gho_in_liquidity_pools` 和 `gho_in_liquidity_pools_yesterday`
-  - 运行频率: 每天上午 9 点
-  - 告警规则: 相对前一日下滑超过 `2%` 时 `@所有人`
+- 调度：每天北京时间 `12:00`
+  - Cron: `0 4 * * *`
+- 告警规则
+  - 相对前一日下滑超过 `2%` 时 `@所有人`
+  - 继续使用状态去重，避免同一告警重复 `@所有人`
 
-## 环境变量
+## 仓库结构
 
-复制 `.env.example` 为 `.env.local` 或直接在系统环境变量 / GitHub Secrets 中配置:
+- [stablecoin_monitor](/d:/学习/课外/stablecoin-monitor/stablecoin_monitor)
+  - Python 版本，仅用于本地 dry-run、接口验证和备份实现
+- [worker/usds](/d:/学习/课外/stablecoin-monitor/worker/usds)
+  - 当前线上 Worker
+  - 同时负责 USDS 和 GHO
+
+## Cloudflare Worker
+
+关键文件：
+
+- [worker/usds/wrangler.jsonc](/d:/学习/课外/stablecoin-monitor/worker/usds/wrangler.jsonc)
+- [worker/usds/src/index.js](/d:/学习/课外/stablecoin-monitor/worker/usds/src/index.js)
+- [worker/usds/package.json](/d:/学习/课外/stablecoin-monitor/worker/usds/package.json)
+
+当前 Cloudflare 配置：
+
+- Cron Triggers
+  - `7,22,37,52 * * * *` for USDS
+  - `0 4 * * *` for GHO
+- KV binding
+  - `STATE_KV`
+- Secret
+  - `LARK_WEBHOOK_URL`
+- 可选 Secret
+  - `MANUAL_TRIGGER_TOKEN`
+- Plaintext vars
+  - `USDS_ALERT_DROP_THRESHOLD=0.01`
+  - `GHO_ALERT_DROP_THRESHOLD=0.02`
+  - `HTTP_TIMEOUT_MS=20000`
+  - `STATE_KEY_PREFIX=stablecoin-monitor`
+
+手动调试入口：
+
+- `GET /health`
+- `GET /run/usds`
+- `GET /run/gho`
+
+如果设置了 `MANUAL_TRIGGER_TOKEN`，请求时带上：
+
+- `Authorization: Bearer <token>`
+- 或 `?token=<token>`
+
+## 本地 Python
+
+本地运行时可以用仓库根目录的 [.env.example](/d:/学习/课外/stablecoin-monitor/.env.example) 作为模板：
 
 ```env
-LARK_WEBHOOK_URL=https://open.larksuite.com/open-apis/bot/v2/hook/...
+LARK_WEBHOOK_URL=
 ALERT_DROP_THRESHOLD=0.02
 HTTP_TIMEOUT_SECONDS=20
-STATE_BACKEND=file
-STATE_REDIS_URL=
-STATE_KEY_PREFIX=stablecoin-monitor
 DRY_RUN=false
 ```
 
-说明:
-
-- `LARK_WEBHOOK_URL`: 必填，飞书自定义机器人 webhook
-- `ALERT_DROP_THRESHOLD`: 默认 `0.02`，代表下滑超过 2% 告警
-- `HTTP_TIMEOUT_SECONDS`: 默认 `20`
-- `STATE_BACKEND`: `file` / `redis` / `none`
-- `STATE_REDIS_URL`: 当 `STATE_BACKEND=redis` 时必填
-- `STATE_KEY_PREFIX`: Redis 键名前缀
-- `DRY_RUN`: 设为 `true` 时只打印 payload，不发消息
-
-## 本地运行
-
-在仓库根目录执行:
+本地命令：
 
 ```bash
 python -m stablecoin_monitor usds --dry-run
@@ -57,125 +99,15 @@ python -m stablecoin_monitor gho --dry-run
 python -m stablecoin_monitor all --dry-run
 ```
 
-## Python 与 Worker
+说明：
 
-- `stablecoin_monitor/`
-  - 保留原始 Python 版本
-  - 适合本地运行、GitHub Actions、以后迁移到其他平台
-- `worker/usds/`
-  - Cloudflare Worker 版 USDS + GHO
-  - 适合用 Cron Trigger 跑每 15 分钟的 USDS 和每天中午一次的 GHO
-  - 使用 Workers KV 保存告警状态
+- Python 版不会自动部署到线上
+- 现在它主要用于本地验证接口和消息格式
+- Python 版仍然保留原来的日级比较逻辑，不等同于线上 USDS 的 15 分钟快照逻辑
 
-## GitHub Actions
+## 已删除的旧方案
 
-已内置两个工作流:
+以下方案已经不再使用，相关部署文件已移除：
 
-- `USDS Monitor`
-  - `7,22,37,52 * * * *`
-  - 每 15 分钟运行一次，避开整刻高峰
-- `GHO Monitor`
-  - `0 1 * * *`
-  - GitHub Actions 使用 UTC，这里对应北京时间 `09:00`
-
-推到 GitHub 后，只需要在仓库 `Settings > Secrets and variables > Actions` 中添加:
-
-- `LARK_WEBHOOK_URL`
-
-然后启用 Actions 即可。
-
-## Render
-
-仓库根目录已提供 [render.yaml](/d:/学习/课外/stablecoin-monitor/render.yaml)，用于把高频的 USDS 任务迁到 Render Cron Job。
-
-当前 Blueprint 定义了两个 Render 资源:
-
-- `stablecoin-monitor-usds`
-  - Render Cron Job
-  - 调度: `7,22,37,52 * * * *`
-  - 执行命令: `python -m stablecoin_monitor usds`
-- `stablecoin-monitor-state`
-  - Render Key Value
-  - 用于保存告警状态，避免每次运行都把已有告警重复当成“新增告警”
-
-部署步骤:
-
-1. 在 Render 中选择 `New +` -> `Blueprint`
-2. 连接这个 GitHub 仓库
-3. 选择 `main` 分支并导入 `render.yaml`
-4. 在 Blueprint 创建流程里填入 `LARK_WEBHOOK_URL`
-5. 创建完成后，Render 会同时创建 USDS Cron Job 和 Key Value
-
-说明:
-
-- Render Key Value 官方文档说明，`connectionString` 可以通过 Blueprint `fromService` 注入；Key Value 也支持 Redis 协议连接
-- Render Key Value 的 `free` 实例不落盘持久化，实例重启后可能丢状态；如果你希望告警去重更稳，建议把 Key Value 升级到带持久化的付费实例
-- GHO 这种每天一次的任务仍然更适合继续留在 GitHub Actions
-
-## Cloudflare Worker
-
-仓库里新增了 [worker/usds/wrangler.jsonc](/d:/学习/课外/stablecoin-monitor/worker/usds/wrangler.jsonc) 和 [worker/usds/src/index.js](/d:/学习/课外/stablecoin-monitor/worker/usds/src/index.js)，用于把 USDS 和 GHO 迁到 Cloudflare Workers。
-
-这个 Worker 的职责:
-
-- 每 15 分钟抓取 USDS 两个接口
-- 每天北京时间 `12:00` 抓取 GHO 两个接口
-- 用 Workers KV 保存上一次告警状态
-- USDS 使用“上一周期快照（约15min）”作为对比基准
-- USDS 只有告警时才发送飞书卡片，并直接 `@所有人`
-- GHO 继续按日级数据比较，保留原来的状态去重逻辑
-
-当前 Cloudflare 配置:
-
-- Cron Triggers:
-  - `7,22,37,52 * * * *` for USDS
-  - `0 4 * * *` for GHO
-- KV binding: `STATE_KV`
-- Secret: `LARK_WEBHOOK_URL`
-- 可选 Secret: `MANUAL_TRIGGER_TOKEN`
-- 变量:
-  - `ALERT_DROP_THRESHOLD=0.01`
-  - `HTTP_TIMEOUT_MS=20000`
-  - `STATE_KEY_PREFIX=stablecoin-monitor`
-
-推荐部署步骤:
-
-1. 安装 Node.js 20+
-2. 进入 [worker/usds](/d:/学习/课外/stablecoin-monitor/worker/usds)
-3. 执行 `npm install`
-4. 登录 Cloudflare: `npx wrangler login`
-5. 首次部署: `npx wrangler deploy`
-6. 设置飞书 webhook secret: `npx wrangler secret put LARK_WEBHOOK_URL`
-7. 如果你想保留手动 HTTP 触发入口，再设置: `npx wrangler secret put MANUAL_TRIGGER_TOKEN`
-8. 再执行一次 `npx wrangler deploy`
-
-如果你后面修改了 cron 配置，Cloudflare 官方文档说明，使用 Wrangler 管理 Trigger 时应以 Wrangler 配置为准；在版本化部署场景下，触发器变更需要 `wrangler triggers deploy` 才会应用。来源:
-
-- Wrangler 配置与 KV 绑定: <https://developers.cloudflare.com/workers/wrangler/configuration/>
-- Cron Triggers: <https://developers.cloudflare.com/workers/configuration/cron-triggers/>
-- Worker secrets: <https://developers.cloudflare.com/workers/configuration/secrets/>
-- KV bindings: <https://developers.cloudflare.com/kv/concepts/kv-bindings/>
-
-Worker 调试入口:
-
-- `GET /health`
-- `GET /run/usds`
-- `GET /run/gho`
-
-说明:
-
-- `/run/usds` 会真正执行一次并向飞书发消息
-- `/run/gho` 会真正执行一次并向飞书发消息
-- 如果你设置了 `MANUAL_TRIGGER_TOKEN`，请求时带上 `Authorization: Bearer <token>` 或 `?token=<token>`
-- 如果你只想测试代码，不想发消息，优先用本地 Python 版的 `--dry-run`
-- USDS 首次运行会先初始化快照，不发消息
-
-## 消息与告警行为
-
-- 消息以飞书卡片形式发送
-- 正常情况下也会推送到群里
-- 只有“新进入告警”的指标才会 `@所有人`
-- 首次启动或首次手动运行时，如果指标本来就已经低于阈值，只记录为“首次运行已发现告警”，不会直接 `@所有人`
-- 如果某指标持续多次处于告警区间，会显示为“持续告警”，但不会每次重复 `@所有人`
-- 数值展示尽量保持接口原始格式
-- `Collateral Ratio` / `collat_ratio` 统一按百分比展示
+- GitHub Actions 定时任务
+- Render Cron Job / Key Value

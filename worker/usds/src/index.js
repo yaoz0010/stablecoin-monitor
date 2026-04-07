@@ -82,7 +82,9 @@ async function runUsdsMonitor(
   } = {}
 ) {
   const timeoutMs = parseInteger(env.HTTP_TIMEOUT_MS, 20000);
-  const thresholdRatio = new Decimal(env.ALERT_DROP_THRESHOLD || "0.02");
+  const thresholdRatio = new Decimal(
+    env.USDS_ALERT_DROP_THRESHOLD || env.ALERT_DROP_THRESHOLD || "0.01"
+  );
 
   const [overall, groups] = await Promise.all([
     fetchJson(USDS_OVERALL_URL, timeoutMs),
@@ -177,7 +179,9 @@ async function runGhoMonitor(
   } = {}
 ) {
   const timeoutMs = parseInteger(env.HTTP_TIMEOUT_MS, 20000);
-  const thresholdRatio = new Decimal(env.ALERT_DROP_THRESHOLD || "0.02");
+  const thresholdRatio = new Decimal(
+    env.GHO_ALERT_DROP_THRESHOLD || env.ALERT_DROP_THRESHOLD || "0.02"
+  );
 
   const [collateralResponse, liquidityResponse] = await Promise.all([
     fetchJson(GHO_COLLATERAL_RATIO_URL, timeoutMs),
